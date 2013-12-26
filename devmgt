@@ -1,0 +1,152 @@
+#!/usr/bin/python
+"""
+ * Copyright (C) 2013 Oracle.  All rights reserved.
+ * This program is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU General Public
+ * License v2 as published by the Free Software Foundation.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
+ * General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public
+ * License along with this program; if not, write to the
+ * Free Software Foundation, Inc., 59 Temple Place - Suite 330,
+ * Boston, MA 021110-1307, USA.
+"""
+
+import os
+import sys
+import time
+import subprocess
+from subprocess import call
+from multiprocessing import Process
+
+cmd=''
+dev=''
+
+def usage():
+	print("Usage:")
+	print("      %s show" % sys.argv[0])
+	print("      %s detach /dev/sd<x>" % sys.argv[0])
+	print("      %s attach host<y>" % sys.argv[0])
+	sys.exit(1)
+
+def read_kmsg():
+	fd = open("/dev/kmsg", "r")
+	# seek to end of file
+	fd.seek(0,2)
+	print "-----/dev/kmsg----"
+	while True:
+		line = fd.readline()
+		logline = line.split(';')[-1]
+		logline = logline[:-1]
+		print '\t'+logline
+
+def get_itl_dev(dev):
+	itl=""
+	res=""
+	disk = dev.split('/')[-1]
+	devpath="/sys/class/block/"+disk
+	hostcmd = subprocess.Popen(["ls","-l",devpath], stdout=subprocess.PIPE)
+	res = hostcmd.communicate()[0]
+	ret = hostcmd.returncode
+	if ret == 0:
+		itl = res.split('/')[-3]
+		itl = itl.replace(':',' ')
+	return ret, itl
+
+def attach_dev(itl):
+	scmd = "echo scsi add-single-device "+itl+" > /proc/scsi/scsi"
+	ret = call(scmd, shell=True)
+	return ret
+
+def detach_dev(itl):
+	scmd = "echo scsi remove-single-device "+itl+" > /proc/scsi/scsi"
+	ret = call(scmd, shell=True)
+	return ret
+
+def is_partition(disk):
+	if "sd".find(disk):
+		return False
+	if "sr0" == disk:
+		return False
+	return True
+
+def find_target(host):
+	devpath = "/sys/class/block"
+	proc = subprocess.Popen(["ls","-l",devpath], stdout=subprocess.PIPE)
+	for line in proc.stdout:
+		line = line[:-1]
+		if "loop" in line or "total" in line:
+			continue
+		if line.split('/')[-5] == host:
+			disk = line.split('/')[-1]
+			if is_partition(disk):
+				continue
+			return disk
+	return ""
+	
+
+def cmd_show():
+	hostpath = "/sys/class/scsi_host"
+	proc = subprocess.Popen(["ls",hostpath], stdout=subprocess.PIPE)
+	for host in proc.stdout:
+		host = host[:-1]
+		if "loop" in host or "total" in host:
+			continue
+		disk = ""
+		disk = find_target(host)
+		print host+" "+disk
+
+
+
+try:
+	cmd = sys.argv[1]
+	if cmd != "show":
+		dev = sys.argv[2]
+	cmd == "attach"
+	cmd == "detach"
+	cmd == "show"
+except:
+	usage()
+
+if cmd == "show":
+	cmd_show()
+	sys.exit(0)
+
+
+if cmd == "attach":
+	devpath = "/sys/class/scsi_host/"+dev
+	if not os.path.exists(devpath):
+		print dev+" can't be accessed, check '"+sys.argv[0]+" show'"
+		sys.exit(1)
+
+	itl = dev[-1]+" - -"
+	p = Process(target=read_kmsg)
+	p.start()
+	ret = attach_dev(itl)
+
+if cmd == "detach":
+	if not os.path.exists(dev):
+		print dev+" can't be accessed"
+		sys.exit(1)
+
+	ret, itl = get_itl_dev(dev)
+	if ret:
+		print "get_itl_dev failed"
+		sys.exit(1)
+	p = Process(target=read_kmsg)
+	p.start()
+	ret = detach_dev(itl)
+
+if not ret:
+	time.sleep(1)
+p.terminate()
+print "------------------"
+
+if not ret:
+	print cmd+" "+dev+" successful"
+else:
+	print cmd+" "+dev+" failed"
